@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: bigdata-postgres
+    environment:
+      POSTGRES_DB: spark
+      POSTGRES_USER: 1
+      POSTGRES_PASSWORD: 1
+    ports:
+      - "7778:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U 1 -d spark"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  spark-master:
+    image: apache/spark:3.5.1
+    container_name: bigdata-spark-master
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
+    volumes:
+      - ./исходные данные:/opt/spark-data:ro
+      - ./jars/postgresql.jar:/opt/spark/jars/postgresql.jar:ro
+      - ./jars/clickhouse.jar:/opt/spark/jars/clickhouse.jar:ro
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+
+  spark-worker:
+    image: apache/spark:3.5.1
+    container_name: bigdata-spark-worker
+    depends_on:
+      - spark-master
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+    environment:
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: 2
+    volumes:
+      - ./исходные данные:/opt/spark-data:ro
+      - ./jars/postgresql.jar:/opt/spark/jars/postgresql.jar:ro
+      - ./jars/clickhouse.jar:/opt/spark/jars/clickhouse.jar:ro
+    ports:
+      - "8081:8081"
+
+  spark-java-job:
+    build:
+      context: .
+      dockerfile: docker/spark-java-job/Dockerfile
+    container_name: bigdata-spark-java-job
+    depends_on:
+      postgres:
+        condition: service_healthy
+      spark-master:
+        condition: service_started
+    environment:
+      SPARK_MASTER_URL: spark://spark-master:7077
+      APP_JAR: /opt/spark-app/app.jar
+      APP_MAIN_CLASS: org.example.SnowflakeEtlJob
+      APP_ARGS: ""
+      JDBC_URL: jdbc:postgresql://postgres:5432/spark
+      JDBC_USER: 1
+      JDBC_PASSWORD: 1
+      CLICKHOUSE_JDBC_URL: jdbc:clickhouse://clickhouse:8123/spark
+      CLICKHOUSE_USER: user
+      CLICKHOUSE_PASSWORD: 1
+    volumes:
+      - ./jars:/opt/spark-app
+      - ./исходные данные:/opt/spark-data:ro
+      - ./jars/postgresql.jar:/opt/spark/jars/postgresql.jar:ro
+      - ./jars/clickhouse.jar:/opt/spark/jars/clickhouse.jar:ro
+    profiles:
+      - job
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: bigdata-clickhouse
+    environment:
+      CLICKHOUSE_USER: user
+      CLICKHOUSE_PASSWORD: 1
+      CLICKHOUSE_DB: spark
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+
+volumes:
+  postgres_data:
+  clickhouse_data:
